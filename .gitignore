@@ -1,0 +1,8 @@
+# Git ignore — files the app generates locally (not source code)
+data/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.Python
+*.apr.json
