@@ -1,8 +1,23 @@
+# pdf_viewer.py — Displays PDF pages and handles mouse tools (highlight, notes).
+# ---------------------------------------------------------------------------
+# Called by: ui/main_window.py
+#
+# Pixel pipeline:
+#   PdfDocument.render_page() → PNG bytes → QImage → QPixmap → QGraphicsScene
+#
+# Library reference: see imports_guide.py in the project root.
+
 from __future__ import annotations
 
+# --- enum (Python built-in) ---
+# Enum creates named constants: ToolMode.NAVIGATE, ToolMode.HIGHLIGHT, etc.
 from enum import Enum, auto
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal, QEvent
+# --- PySide6.QtCore ---
+# Signal   : Emit status messages and "annotation changed" to MainWindow
+# QPointF  : Mouse position on the page (float x, y)
+# Qt       : Constants (mouse buttons, aspect ratio, layout direction)
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -13,9 +28,13 @@ from PySide6.QtGui import (
     QPixmap,
     QShortcut,
     QTransform,
-    QWheelEvent,
 )
 
+# --- PySide6.QtWidgets ---
+# QGraphicsView/Scene : Canvas for page + overlays (highlights, pins)
+# QGraphicsRectItem   : Yellow highlight rectangle
+# QGraphicsEllipseItem: Sticky note pin (small circle)
+# QApplication        : Access system clipboard for copy
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -32,6 +51,7 @@ from PySide6.QtWidgets import (
     QPushButton,
 )
 
+# --- Our core + ui ---
 from core.annotation_store import AnnotationStore, Highlight, StickyNote
 from core.ocr_service import OcrWord
 from core.pdf_document import PdfDocument
@@ -93,6 +113,7 @@ class SelectionToolbar(QWidget):
                     border: 2px solid rgba(0,0,0,0.3);
                 }}
             """)
+            # Capture the color in a lambda securely
             btn.clicked.connect(lambda checked=False, c=color_name: self._trigger_highlight(c))
             colors_layout.addWidget(btn)
             
@@ -135,11 +156,14 @@ class SelectionToolbar(QWidget):
 
 
 class ToolMode(Enum):
+    """Which mouse tool is active on the viewer."""
+
     NAVIGATE = auto()
     HIGHLIGHT = auto()
     STICKY_NOTE = auto()
 
 
+# Map color names to Qt colors for highlights and note pins
 COLOR_MAP = {
     "yellow": QColor(255, 240, 0, 100),
     "green": QColor(100, 255, 100, 100),
@@ -148,11 +172,18 @@ COLOR_MAP = {
 
 
 class PdfViewer(QGraphicsView):
+    """
+    Central widget showing the current PDF page with overlays.
+
+    Signals:
+        status_message(str): Send status text to MainWindow's status bar.
+        annotation_changed(): User added highlight/note — MainWindow should save.
+        sticky_note_added(int, float, float, str): page, x, y, content
+    """
+
     status_message = Signal(str)
     annotation_changed = Signal()
     sticky_note_added = Signal(int, float, float, str)
-    wheel_zoom_requested = Signal(int)
-    page_nav_requested = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -160,18 +191,17 @@ class PdfViewer(QGraphicsView):
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
 
+        # PdfDocument holds the open PDF (from core/) — viewer asks it to render pages
         self._pdf: PdfDocument | None = None
         self._annotations: AnnotationStore | None = None
 
         self._current_page: int = 0
         self._zoom: float = 1.0
-        self._rotation: int = 0
+        self._rotation: int = 0  # 0, 90, 180, 270 degrees
         self._page_width: int = 1
         self._page_height: int = 1
         self._unrotated_page_width: int = 1
         self._unrotated_page_height: int = 1
-        
-        self._gesture_zoom_accum: float = 0.0
 
         # OCR words for current page (empty until OCR runs)
         self._ocr_words: list[OcrWord] = []
@@ -239,6 +269,7 @@ class PdfViewer(QGraphicsView):
         if current_line:
             lines.append(current_line)
             
+        # 3. Sort each line Right-to-Left and flatten
         sorted_words = []
         for line in lines:
             line.sort(key=lambda w: w.x + w.w, reverse=True)
@@ -252,13 +283,21 @@ class PdfViewer(QGraphicsView):
             self.show_page(self._current_page)
 
     def set_tool_mode(self, mode: ToolMode) -> None:
+        """Switch between navigate / highlight / sticky note."""
         self._tool_mode = mode
-        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        if mode == ToolMode.NAVIGATE:
+            # Restore scroll-by-drag when returning to navigate mode
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        else:
+            # NoDrag allows free mouse-press handling for highlight/note tools
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
 
     def current_page(self) -> int:
+        """Return 0-based current page index."""
         return self._current_page
 
     def rotate_cw(self) -> None:
+        """Rotate view 90° clockwise."""
         self._rotation = (self._rotation + 90) % 360
         if self._pdf and self._pdf.is_open:
             self.show_page(self._current_page)
@@ -267,6 +306,12 @@ class PdfViewer(QGraphicsView):
         return self._pdf is not None and self._pdf.is_open
 
     def show_page(self, page_index: int) -> None:
+        """
+        Render and display one page.
+
+        Args:
+            page_index: 0-based page number.
+        """
         if not self._pdf or not self._pdf.is_open:
             return
 
@@ -278,6 +323,7 @@ class PdfViewer(QGraphicsView):
         self._unrotated_page_width = unrotated_w
         self._unrotated_page_height = unrotated_h
 
+        # QImage loads PNG bytes; QPixmap is what Qt draws on screen
         image = QImage.fromData(png_bytes, "PNG")
         if self._rotation:
             transform = QTransform().rotate(self._rotation)
@@ -288,6 +334,7 @@ class PdfViewer(QGraphicsView):
         self._page_width = pixmap.width()
         self._page_height = pixmap.height()
 
+        # White page with soft drop shadow (Fluent document canvas)
         margin = 24
         page_item = QGraphicsPixmapItem(pixmap)
         page_item.setOffset(margin, margin)
@@ -313,6 +360,7 @@ class PdfViewer(QGraphicsView):
         self.status_message.emit(msg)
 
     def _redraw_overlays(self) -> None:
+        """Draw highlights, sticky note pins, and OCR word boxes on top of page."""
         if not self._annotations:
             return
 
@@ -320,6 +368,7 @@ class PdfViewer(QGraphicsView):
         w, h = self._page_width, self._page_height
         margin = 24
 
+        # Saved highlights for this page
         for hl in self._annotations.highlights_for_page(page):
             color = COLOR_MAP.get(hl.color, COLOR_MAP["yellow"])
             for norm_rect in hl.rects:
@@ -330,6 +379,7 @@ class PdfViewer(QGraphicsView):
                 item.setZValue(10)
                 self._scene.addItem(item)
 
+        # Sticky note pins (small yellow circles)
         for note in self._annotations.sticky_notes_for_page(page):
             scene_pos = self._map_unrotated_normalized_point_to_scene_point(QPointF(note.x, note.y))
             cx = scene_pos.x()
@@ -341,6 +391,17 @@ class PdfViewer(QGraphicsView):
             pin.setToolTip(note.content[:200])
             self._scene.addItem(pin)
 
+        # Optional: faint boxes around OCR words (helps learning/debugging)
+        # for word in self._ocr_words:
+        #     tx = margin + word.x * w
+        #     ty = margin + word.y * h
+        #     tw = word.w * w
+        #     th = word.h * h
+        #     box = QGraphicsRectItem(tx, ty, tw, th)
+        #     box.setPen(QPen(QColor(0, 120, 255, 80), 1, Qt.PenStyle.DotLine))
+        #     box.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        #     box.setZValue(5)
+        #     self._scene.addItem(box)
 
     def mousePressEvent(self, event) -> None:
         if not self._pdf or not self._pdf.is_open:
@@ -350,6 +411,7 @@ class PdfViewer(QGraphicsView):
         scene_pos = self.mapToScene(event.position().toPoint())
         margin = 24
 
+        # Both Navigate and Highlight trigger the same native text-selection box
         if self._tool_mode in (ToolMode.HIGHLIGHT, ToolMode.NAVIGATE) and event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = scene_pos
             self._clear_selection()
@@ -374,16 +436,20 @@ class PdfViewer(QGraphicsView):
         
         nx, ny = norm_pos.x(), norm_pos.y()
         
+        # Exact match first
         for i, w in enumerate(self._ocr_words):
             if w.x <= nx <= w.x + w.w and w.y <= ny <= w.y + w.h:
                 return i
                 
+        # Nearest match
         best_dist = float('inf')
         best_idx = None
         for i, w in enumerate(self._ocr_words):
+            # Calculate distance to the closest edge of the bounding box
             dx = max(w.x - nx, 0.0, nx - (w.x + w.w))
             dy = max(w.y - ny, 0.0, ny - (w.y + w.h))
             
+            # Weight dy more heavily to prefer words on the same horizontal line
             dist = dx*dx + (dy * 5.0)**2
             if dist < best_dist:
                 best_dist = dist
@@ -408,6 +474,7 @@ class PdfViewer(QGraphicsView):
 
         new_selected = self._ocr_words[min_idx:max_idx+1]
 
+        # Optimization: only redraw if the actual word selection changed
         if getattr(self, '_selected_words', None) == new_selected:
             return
             
@@ -417,6 +484,7 @@ class PdfViewer(QGraphicsView):
         rects = self._group_words_into_rects(self._selected_words)
         for r in rects:
             scene_rect = self._map_unrotated_normalized_rect_to_scene_rect(r)
+            # Expand slightly (2px) so gaps between words merge neatly
             scene_rect.adjust(-2, -2, 2, 2)
             item = QGraphicsRectItem(scene_rect)
             item.setPen(QPen(Qt.PenStyle.NoPen))
@@ -426,17 +494,20 @@ class PdfViewer(QGraphicsView):
             self._selection_items.append(item)
 
     def _clear_selection_items(self) -> None:
+        """Removes the blue highlight boxes from the scene."""
         for item in getattr(self, '_selection_items', []):
             if item.scene() == self._scene:
                 self._scene.removeItem(item)
         self._selection_items = []
         
+        # Clear the old unused rubber band if it still exists
         if getattr(self, '_rubber_band', None):
             if self._rubber_band.scene() == self._scene:
                 self._scene.removeItem(self._rubber_band)
             self._rubber_band = None
 
     def _clear_selection(self) -> None:
+        """Fully clears selected words and UI elements."""
         self._clear_selection_items()
         self._selected_words = []
 
@@ -447,6 +518,7 @@ class PdfViewer(QGraphicsView):
             dy = scene_pos.y() - self._drag_start.y()
             dist_sq = dx*dx + dy*dy
             
+            # Only pop up the menu if the user actually dragged and selected words
             if dist_sq >= 25 and self._selected_words:
                 self._show_contextual_menu(event.globalPosition().toPoint())
             else:
@@ -456,43 +528,8 @@ class PdfViewer(QGraphicsView):
             return
         super().mouseReleaseEvent(event)
 
-    def event(self, event: QEvent) -> bool:
-        if event.type() == QEvent.Type.NativeGesture:
-            if event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
-                self._gesture_zoom_accum += event.value()
-                if self._gesture_zoom_accum > 0.1:
-                    self.wheel_zoom_requested.emit(1)
-                    self._gesture_zoom_accum = 0.0
-                elif self._gesture_zoom_accum < -0.1:
-                    self.wheel_zoom_requested.emit(-1)
-                    self._gesture_zoom_accum = 0.0
-                return True
-        return super().event(event)
-
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-            delta = event.angleDelta().y()
-            if delta > 0:
-                self.wheel_zoom_requested.emit(1)
-            elif delta < 0:
-                self.wheel_zoom_requested.emit(-1)
-            event.accept()
-            return
-
-        vbar = self.verticalScrollBar()
-        at_top = vbar.value() <= vbar.minimum()
-        at_bottom = vbar.value() >= vbar.maximum()
-
-        super().wheelEvent(event)
-
-        if event.modifiers() == Qt.KeyboardModifier.NoModifier:
-            delta = event.angleDelta().y()
-            if delta < 0 and at_bottom:
-                self.page_nav_requested.emit(1)
-            elif delta > 0 and at_top:
-                self.page_nav_requested.emit(-1)
-
     def _show_contextual_menu(self, global_pos) -> None:
+        """Displays a floating rounded window with copy and highlight options."""
         if hasattr(self, '_selection_toolbar') and self._selection_toolbar:
             self._selection_toolbar.close()
             
@@ -502,27 +539,54 @@ class PdfViewer(QGraphicsView):
             on_copy=self._copy_selection_and_clear,
             on_close=self._clear_selection
         )
-        self._selection_toolbar.show()
-        
-        tw = self._selection_toolbar.width()
-        th = self._selection_toolbar.height()
-        
+        # Use sizeHint() before show() — the widget hasn't been laid out yet so
+        # width()/height() are 0 until the event loop processes the first paint.
+        hint = self._selection_toolbar.sizeHint()
+        tw = hint.width()
+        th = hint.height()
+
         self._selection_toolbar.move(global_pos.x() - tw // 2, global_pos.y() - th - 10)
+        self._selection_toolbar.show()
 
     def _copy_selection_and_clear(self) -> None:
         self._copy_selection()
         self._clear_selection()
 
     def _group_words_into_rects(self, words: list[OcrWord]) -> list[list[float]]:
+        """
+        Group selected words into per-line highlight rects using a gap-threshold
+        approach — the same strategy used by pdfminer.six (LAParams.line_margin)
+        and PyMuPDF's text-block extraction.
+
+        Algorithm
+        ---------
+        1. Sort words by their y-center (top-to-bottom).
+        2. Compute the median word height as a stable estimate of one line's height.
+        3. A new line starts whenever the gap between consecutive sorted y-centers
+           exceeds 50 % of the median height.  This single threshold is immune to
+           cascade blow-up and diacritic height variation because it compares
+           adjacent *sorted* words, not a running bounding band.
+        4. Build one tight rect per line, then apply the RTL flowing-highlight
+           expansion:
+             - single line : tight rect
+             - first line  : extend right edge to page text-column right margin
+             - middle lines: full text-column width
+             - last line   : extend left edge to page text-column left margin
+
+        Returns list of [x0, y0, x1, y1] in normalised (0-1) coordinates.
+        """
         if not words:
             return []
 
+        # ── 1. sort by y-center ───────────────────────────────────────────────
         by_yc = sorted(words, key=lambda w: w.y + w.h / 2)
 
+        # ── 2. median word height ─────────────────────────────────────────────
         heights = sorted(w.h for w in by_yc)
         median_h = heights[len(heights) // 2]
-        threshold = median_h * 0.5
+        threshold = median_h * 0.5   # gap > 50 % of a line height → new line
 
+        # ── 3. split into lines ───────────────────────────────────────────────
         lines: list[list[OcrWord]] = []
         current: list[OcrWord] = [by_yc[0]]
 
@@ -535,10 +599,12 @@ class PdfViewer(QGraphicsView):
                 current.append(curr)
         lines.append(current)
 
+        # ── 4. page-level column bounds (for RTL flowing expansion) ───────────
         all_words = self._ocr_words if self._ocr_words else words
         page_x0 = min(w.x       for w in all_words)
         page_x1 = max(w.x + w.w for w in all_words)
 
+        # ── 5. build one rect per line ────────────────────────────────────────
         if len(lines) == 1:
             ln = lines[0]
             return [[min(w.x for w in ln), min(w.y for w in ln),
@@ -552,11 +618,11 @@ class PdfViewer(QGraphicsView):
             lx0 = min(w.x       for w in ln)
             lx1 = max(w.x + w.w for w in ln)
 
-            if i == 0:
+            if i == 0:          # first line: tight left, extend to right margin
                 x0, x1 = lx0, page_x1
-            elif i == n - 1:
+            elif i == n - 1:    # last line: extend to left margin, tight right
                 x0, x1 = page_x0, lx1
-            else:
+            else:               # middle lines: full column width
                 x0, x1 = page_x0, page_x1
 
             rects.append([x0, y0, x1, y1])
@@ -565,6 +631,7 @@ class PdfViewer(QGraphicsView):
 
 
     def _finish_highlight(self, color: str = "yellow") -> None:
+        """Create highlight from selected words."""
         if not self._annotations or not self._selected_words:
             self._clear_selection()
             return
@@ -581,6 +648,7 @@ class PdfViewer(QGraphicsView):
         self._clear_selection()
 
     def _place_sticky_note(self, scene_pos: QPointF) -> None:
+        """Open dialog and emit sticky note at click position."""
         dlg = StickyNoteDialog(parent=self)
         if not dlg.exec():
             return
@@ -606,6 +674,7 @@ class PdfViewer(QGraphicsView):
         self.status_message.emit("Sticky note added")
 
     def _select_word_at(self, scene_pos: QPointF) -> None:
+        """Select single OCR word under cursor for copy."""
         norm_pos = self._map_scene_point_to_unrotated_normalized(scene_pos)
         nx, ny = norm_pos.x(), norm_pos.y()
         hits = find_words_in_rect(self._ocr_words, nx, ny, nx, ny)
@@ -614,20 +683,23 @@ class PdfViewer(QGraphicsView):
             self.status_message.emit(f"Selected: {hits[0].text} (Ctrl+C to copy)")
 
     def _map_scene_point_to_unrotated_normalized(self, scene_pos: QPointF) -> QPointF:
+        """Converts a point from scene coordinates to normalized (0-1) coordinates on the unrotated page."""
         margin = 24
         view_x = scene_pos.x() - margin
         view_y = scene_pos.y() - margin
 
         if self._rotation == 90:
-            unrotated_x = self._unrotated_page_width - view_y
-            unrotated_y = view_x
+            # 90° CW: rotated(view_x, view_y) → original(view_y, H − view_x)
+            unrotated_x = view_y
+            unrotated_y = self._unrotated_page_height - view_x
         elif self._rotation == 180:
             unrotated_x = self._unrotated_page_width - view_x
             unrotated_y = self._unrotated_page_height - view_y
         elif self._rotation == 270:
-            unrotated_x = view_y
-            unrotated_y = self._unrotated_page_height - view_x
-        else:
+            # 270° CW: rotated(view_x, view_y) → original(W − view_y, view_x)
+            unrotated_x = self._unrotated_page_width - view_y
+            unrotated_y = view_x
+        else:  # self._rotation == 0
             unrotated_x = view_x
             unrotated_y = view_y
 
@@ -636,31 +708,36 @@ class PdfViewer(QGraphicsView):
         return QPointF(max(0, nx), max(0, ny))
 
     def _map_unrotated_normalized_point_to_scene_point(self, norm_pos: QPointF) -> QPointF:
+        """Converts a normalized point on the unrotated page to a QPointF in scene coordinates."""
         margin = 24
         page_x = norm_pos.x() * self._unrotated_page_width
         page_y = norm_pos.y() * self._unrotated_page_height
 
         if self._rotation == 90:
-            view_x = page_y
-            view_y = self._unrotated_page_width - page_x
+            # Inverse of 90° CW: original(page_x, page_y) → rotated(H − page_y, page_x)
+            view_x = self._unrotated_page_height - page_y
+            view_y = page_x
         elif self._rotation == 180:
             view_x = self._unrotated_page_width - page_x
             view_y = self._unrotated_page_height - page_y
         elif self._rotation == 270:
-            view_x = self._unrotated_page_height - page_y
-            view_y = page_x
-        else:
+            # Inverse of 270° CW: original(page_x, page_y) → rotated(page_y, W − page_x)
+            view_x = page_y
+            view_y = self._unrotated_page_width - page_x
+        else:  # self._rotation == 0
             view_x = page_x
             view_y = page_y
         return QPointF(view_x + margin, view_y + margin)
 
     def _map_unrotated_normalized_rect_to_scene_rect(self, norm_rect: list[float]) -> QRectF:
+        """Converts a normalized rect on the unrotated page to a QRectF in scene coordinates."""
         nx0, ny0, nx1, ny1 = norm_rect
         p1_scene = self._map_unrotated_normalized_point_to_scene_point(QPointF(nx0, ny0))
         p2_scene = self._map_unrotated_normalized_point_to_scene_point(QPointF(nx1, ny1))
         return QRectF(p1_scene, p2_scene).normalized()
 
     def _copy_selection(self) -> None:
+        """Copy selected OCR words to clipboard with Arabic shaping."""
         if not self._selected_words:
             return
         text = words_to_full_text(self._selected_words)
