@@ -1,6 +1,3 @@
-# empty_state.py — Shown in the document area when no PDF is loaded.
-# ---------------------------------------------------------------------------
-
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
@@ -8,8 +5,6 @@ from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 
 class EmptyState(QWidget):
-    """Centered placeholder: document icon, message, Open File button."""
-
     open_clicked = Signal()
 
     def __init__(self, parent=None) -> None:

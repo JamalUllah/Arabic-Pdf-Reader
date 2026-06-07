@@ -1,7 +1,3 @@
-# toolbar.py — Fluent primary toolbar (56px) below the app header.
-# ---------------------------------------------------------------------------
-# Ribbon-style groups: Find/Annotate/Clip | Page nav | Zoom | View | Tools | Layout
-
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
@@ -19,8 +15,6 @@ from ui.widgets import FluentToolButton, IconToolButton, ToolbarDivider
 
 
 class ReaderToolbar(QWidget):
-    """Primary command toolbar — emits signals; MainWindow handles logic."""
-
     open_clicked = Signal()
     prev_clicked = Signal()
     next_clicked = Signal()
@@ -37,7 +31,7 @@ class ReaderToolbar(QWidget):
     search_requested = Signal(str)
     sidebar_toggle_clicked = Signal()
     rotate_clicked = Signal()
-    view_mode_changed = Signal(str)  # "single" | "two" | "continuous"
+    view_mode_changed = Signal(str)
     find_clicked = Signal()
     annotate_menu_requested = Signal()
     layers_clicked = Signal()
@@ -50,14 +44,13 @@ class ReaderToolbar(QWidget):
         self.setObjectName("PrimaryToolbar")
         self.setFixedHeight(56)
 
-        self._zoom_index = 3  # 100%
+        self._zoom_index = 3
         self._total_pages = 1
 
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 4, 12, 4)
         row.setSpacing(8)
 
-        # --- Left tool group ---
         find_btn = FluentToolButton("🔍", "Find")
         find_btn.clicked.connect(self._on_find_click)
         row.addWidget(find_btn)
@@ -82,7 +75,6 @@ class ReaderToolbar(QWidget):
 
         row.addWidget(ToolbarDivider())
 
-        # --- Page navigation ---
         prev_btn = IconToolButton("‹", "Previous page")
         prev_btn.clicked.connect(self.prev_clicked.emit)
         row.addWidget(prev_btn)
@@ -107,7 +99,6 @@ class ReaderToolbar(QWidget):
 
         row.addWidget(ToolbarDivider())
 
-        # --- Zoom ---
         zoom_out = IconToolButton("−", "Zoom out")
         zoom_out.clicked.connect(self._zoom_out)
         row.addWidget(zoom_out)
@@ -122,7 +113,6 @@ class ReaderToolbar(QWidget):
 
         row.addWidget(ToolbarDivider())
 
-        # --- View modes ---
         self._view_single = IconToolButton("▭", "Single page", checkable=True)
         self._view_single.setChecked(True)
         self._view_two = IconToolButton("▭▭", "Two page view", checkable=True)
@@ -137,7 +127,6 @@ class ReaderToolbar(QWidget):
 
         row.addWidget(ToolbarDivider())
 
-        # --- Reading tools ---
         rotate_btn = IconToolButton("↻", "Rotate page")
         rotate_btn.clicked.connect(self.rotate_clicked.emit)
         row.addWidget(rotate_btn)
@@ -148,7 +137,6 @@ class ReaderToolbar(QWidget):
 
         row.addWidget(ToolbarDivider())
 
-        # --- Layout / actions ---
         self._sidebar_btn = IconToolButton("☰", "Toggle sidebar", checkable=True)
         self._sidebar_btn.setChecked(True)
         self._sidebar_btn.clicked.connect(self.sidebar_toggle_clicked.emit)
@@ -240,7 +228,7 @@ class ReaderToolbar(QWidget):
         dialog = QInputDialog(self)
         dialog.setWindowTitle("Find")
         dialog.setLabelText("Search notes and highlights:")
-        dialog.setStyleSheet("")  # Reset style for readability
+        dialog.setStyleSheet("")
         ok = dialog.exec()
         text = dialog.textValue()
 

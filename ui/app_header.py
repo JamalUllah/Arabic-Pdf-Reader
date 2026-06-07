@@ -1,7 +1,3 @@
-# app_header.py — Top application header (64px) with title and window controls.
-# ---------------------------------------------------------------------------
-# Fluent Design: back button, "Reader · filename", minimize / maximize / close.
-
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal, QPoint
@@ -9,14 +5,6 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSp
 
 
 class AppHeader(QWidget):
-    """
-    Fixed 64px header bar. Emits signals for navigation and window controls.
-
-    Signals:
-        back_clicked: User clicked the blue back button (close current doc).
-        open_requested: Reserved for future use.
-    """
-
     back_clicked = Signal()
 
     def __init__(self, parent=None) -> None:

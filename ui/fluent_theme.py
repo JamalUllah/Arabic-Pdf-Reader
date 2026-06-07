@@ -1,7 +1,3 @@
-# fluent_theme.py — Windows 11 Fluent Design colors and global stylesheet.
-# ---------------------------------------------------------------------------
-# Applied once in MainWindow. Adjust COLORS here to retheme the whole app.
-
 COLORS = {
     "primary": "#0A84FF",
     "primary_hover": "#0070E0",
@@ -21,7 +17,6 @@ FONT_FAMILY = '"Segoe UI", "Segoe UI Variable", sans-serif'
 
 
 def build_stylesheet() -> str:
-    """Return global QSS for the Fluent reader shell."""
     c = COLORS
     return f"""
     * {{

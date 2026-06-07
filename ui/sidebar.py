@@ -1,6 +1,3 @@
-# sidebar.py — Left navigation panel (320px) with Pages, Bookmarks, Notes, Details.
-# ---------------------------------------------------------------------------
-
 from __future__ import annotations
 
 from typing import Callable
@@ -26,12 +23,6 @@ from core.text_layer import shape_arabic_for_display
 
 
 class Sidebar(QWidget):
-    """
-    Left docked sidebar: Pages | Bookmarks | Notes | Details.
-
-    Width 320px, light gray Fluent background.
-    """
-
     SIDEBAR_WIDTH = 320
 
     def __init__(self, go_to_page_fn: Callable[[int], None], parent=None) -> None:
@@ -52,13 +43,11 @@ class Sidebar(QWidget):
         self._tabs = QTabWidget()
         layout.addWidget(self._tabs)
 
-        # --- Pages tab (thumbnails) ---
         self._pages_list = QListWidget()
         self._pages_list.setIconSize(QSize(80, 110))
         self._pages_list.itemClicked.connect(self._on_page_thumb_clicked)
         self._tabs.addTab(self._pages_list, "Pages")
 
-        # --- Bookmarks tab ---
         bookmarks_container = QWidget()
         bm_layout = QVBoxLayout(bookmarks_container)
         bm_layout.setContentsMargins(0, 8, 0, 8)
@@ -80,12 +69,10 @@ class Sidebar(QWidget):
         bm_layout.addWidget(self._bookmarks_list)
         self._tabs.addTab(bookmarks_container, "Bookmarks")
 
-        # --- Notes tab (page notes + sticky + highlights) ---
         self._notes_list = QListWidget()
         self._notes_list.itemDoubleClicked.connect(self._on_item_clicked)
         self._tabs.addTab(self._notes_list, "Notes")
 
-        # --- Details tab ---
         details_scroll = QScrollArea()
         details_scroll.setWidgetResizable(True)
         self._details_widget = QWidget()
@@ -223,7 +210,7 @@ class Sidebar(QWidget):
             self._add_note_item("Sticky", note.page, note.content)
         for note in results["page_notes"]:
             self._add_note_item("Page note", note.page, note.content)
-        self._tabs.setCurrentIndex(2)  # Notes tab
+        self._tabs.setCurrentIndex(2)
 
     def show_highlights_tab(self) -> None:
         self._tabs.setCurrentIndex(2)

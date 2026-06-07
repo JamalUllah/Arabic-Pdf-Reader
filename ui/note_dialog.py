@@ -1,24 +1,7 @@
-# note_dialog.py — Popup dialogs for sticky notes and go-to-page.
-# ---------------------------------------------------------------------------
-# Called by: ui/main_window.py, ui/pdf_viewer.py
-#
-# QDialog is a small popup window that blocks until the user clicks OK/Cancel.
-#
-# Library reference: see imports_guide.py in the project root.
-
 from __future__ import annotations
 
-# --- Qt ---
-# Qt.LayoutDirection.RightToLeft : Arabic text flows right-to-left in QTextEdit
 from PySide6.QtCore import Qt
 
-# --- PySide6.QtWidgets ---
-# QDialog         : Popup window base (StickyNote, GoToPage, Bookmark dialogs)
-# QDialogButtonBox: Standard OK / Cancel button row
-# QTextEdit       : Multi-line Arabic note editor
-# QSpinBox        : Pick page number in GoToPageDialog
-# QLineEdit       : Bookmark title input
-# QFormLayout     : Label + field pairs
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -33,15 +16,6 @@ from PySide6.QtWidgets import (
 
 
 class StickyNoteDialog(QDialog):
-    """
-    Dialog to create or edit a sticky note's text.
-
-    Usage:
-        dlg = StickyNoteDialog(parent=self, initial_text="...")
-        if dlg.exec():          # exec() shows dialog and waits
-            text = dlg.text()   # user clicked OK
-    """
-
     def __init__(
         self,
         parent=None,
@@ -56,26 +30,21 @@ class StickyNoteDialog(QDialog):
 
         self._editor = QTextEdit()
         self._editor.setPlainText(initial_text)
-        # RTL layout for Arabic typing
         self._editor.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         layout.addWidget(self._editor)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        # clicked.connect(...) — when OK clicked, call self.accept()
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
     def text(self) -> str:
-        """Return the note text the user entered."""
         return self._editor.toPlainText().strip()
 
 
 class PageNoteDialog(QDialog):
-    """Dialog to edit a page-level summary note."""
-
     def __init__(self, parent=None, page_number: int = 1, initial_text: str = "") -> None:
         super().__init__(parent)
         self.setWindowTitle(f"Page Note — Page {page_number}")
@@ -101,8 +70,6 @@ class PageNoteDialog(QDialog):
 
 
 class GoToPageDialog(QDialog):
-    """Dialog asking the user which page number to jump to."""
-
     def __init__(self, parent=None, current_page: int = 1, total_pages: int = 1) -> None:
         super().__init__(parent)
         self.setWindowTitle("Go to Page")
@@ -123,13 +90,10 @@ class GoToPageDialog(QDialog):
         layout.addRow(buttons)
 
     def page_number(self) -> int:
-        """Return 1-based page number from the spin box."""
         return self._spin.value()
 
 
 class BookmarkTitleDialog(QDialog):
-    """Optional dialog to name a bookmark."""
-
     def __init__(self, parent=None, page_number: int = 1, initial_title: str = "") -> None:
         super().__init__(parent)
         self.setWindowTitle("Add Bookmark")

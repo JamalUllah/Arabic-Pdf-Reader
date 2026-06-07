@@ -1,12 +1,8 @@
-# main_window.py — Main application window; wires UI to core logic.
-# ---------------------------------------------------------------------------
-# Fluent three-pane layout:
-#   AppHeader (64px) → ReaderToolbar (56px) → Sidebar (left) + DocumentViewport
-
 from __future__ import annotations
 
 import sys
 import json
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
@@ -40,7 +36,6 @@ DATA_DIR = PROJECT_ROOT / "data"
 RECENT_FILE = DATA_DIR / "recent.json"
 OCR_CACHE_DIR = DATA_DIR / "ocr_cache"
 
-# Constants for native window event handling (Windows-specific)
 if sys.platform == "win32":
     import ctypes
     from ctypes.wintypes import MSG
@@ -81,11 +76,8 @@ class OcrWorker(QObject):
 
 
 class OcrAllPagesWorker(QObject):
-    """Runs OCR on all pages of a PDF in a background thread."""
-
     finished = Signal()
     error = Signal(str)
-    page_finished = Signal(int)  # 1-based page number
     progress_text = Signal(str)
 
     def __init__(self, pdf: PdfDocument, cache: OcrCache, pdf_hash: str) -> None:
@@ -97,7 +89,6 @@ class OcrAllPagesWorker(QObject):
 
     @Slot()
     def run(self) -> None:
-        """Loop through all pages and run OCR if not cached."""
         try:
             total_pages = self._pdf.page_count
             for i in range(total_pages):
@@ -112,17 +103,14 @@ class OcrAllPagesWorker(QObject):
         except Exception as exc:
             self.error.emit(str(exc))
         finally:
-            self.finished.emit()  # Ensure finished is always emitted for cleanup
+            self.finished.emit()
 
     @Slot()
     def cancel(self) -> None:
-        """Signal from UI to stop the OCR loop."""
         self._is_cancelled = True
 
 
 class MainWindow(QMainWindow):
-    """Top-level Fluent Design PDF reader window."""
-
     def __init__(self) -> None:
         super().__init__()
 
@@ -135,9 +123,9 @@ class MainWindow(QMainWindow):
         self._pdf = PdfDocument()
         self._annotations: AnnotationStore | None = None
         self._ocr_cache = OcrCache(OCR_CACHE_DIR)
-        self.border_width = 8  # For hit-testing the resize handles
+        self.border_width = 8
+        self._last_scroll_nav_time = 0.0
 
-        # --- Shell layout ---
         shell = QWidget()
         shell_layout = QVBoxLayout(shell)
         shell_layout.setContentsMargins(0, 0, 0, 0)
@@ -184,31 +172,26 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(100, self._check_tesseract_on_startup)
 
     def _show_message_box(self, icon: QMessageBox.Icon, title: str, text: str) -> None:
-        """Create and show a message box, resetting the stylesheet to ensure readability."""
         dlg = QMessageBox(self)
         dlg.setIcon(icon)
         dlg.setWindowTitle(title)
         dlg.setText(text)
-        dlg.setStyleSheet("")  # Reset to default system style
+        dlg.setStyleSheet("")
         dlg.exec()
 
     def _check_tesseract_on_startup(self) -> None:
-        """Check for Tesseract after UI is shown, so it doesn't block startup."""
         ok, msg = check_tesseract_installed()
         if not ok:
             self._show_message_box(QMessageBox.Icon.Warning, "Tesseract not found", msg)
 
     def nativeEvent(self, eventType, message):
-        """Handle native Windows events to enable resizing and snapping."""
         if sys.platform == "win32" and eventType == b"windows_generic_MSG":
             msg = MSG.from_address(message.__int__())
-            if msg.message == 0x0084:  # WM_NCHITTEST
-                # Get mouse position in screen coordinates
+            if msg.message == 0x0084:
                 x = ctypes.c_short(msg.lParam & 0xFFFF).value
                 y = ctypes.c_short(msg.lParam >> 16).value
                 rect = self.geometry()
 
-                # Check corners first due to overlap
                 if x >= rect.left() and x < rect.left() + self.border_width:
                     if y >= rect.top() and y < rect.top() + self.border_width:
                         return True, HT_TOPLEFT
@@ -221,7 +204,6 @@ class MainWindow(QMainWindow):
                     if y <= rect.bottom() and y > rect.bottom() - self.border_width:
                         return True, HT_BOTTOMRIGHT
 
-                # Check edges
                 if x >= rect.left() and x < rect.left() + self.border_width:
                     return True, HT_LEFT
                 if x <= rect.right() and x > rect.right() - self.border_width:
@@ -234,11 +216,7 @@ class MainWindow(QMainWindow):
         return super().nativeEvent(eventType, message)
 
     def resizeEvent(self, event) -> None:
-        """Handle window resize to create a responsive layout."""
         super().resizeEvent(event)
-
-        # Threshold for a "narrow" window where the sidebar should be hidden.
-        # Sidebar is 320px wide. Let's give the viewer at least ~500px.
         narrow_width_threshold = 850
 
         if self.width() < narrow_width_threshold:
@@ -270,6 +248,24 @@ class MainWindow(QMainWindow):
 
         self._viewer.status_message.connect(self._status.showMessage)
         self._viewer.annotation_changed.connect(self._save_annotations)
+        self._viewer.wheel_zoom_requested.connect(self._on_wheel_zoom)
+        self._viewer.page_nav_requested.connect(self._on_page_nav)
+
+    def _on_wheel_zoom(self, direction: int) -> None:
+        if direction > 0:
+            self._toolbar._zoom_in()
+        else:
+            self._toolbar._zoom_out()
+
+    def _on_page_nav(self, direction: int) -> None:
+        now = time.time()
+        if now - self._last_scroll_nav_time < 0.5:
+            return
+        self._last_scroll_nav_time = now
+        if direction > 0:
+            self.on_next_page()
+        else:
+            self.on_prev_page()
 
     def _wire_shortcuts(self) -> None:
         QShortcut(QKeySequence("Ctrl+O"), self, self.on_open_pdf)
@@ -420,7 +416,7 @@ class MainWindow(QMainWindow):
             "Preparing to OCR all pages...", "Cancel", 0, self._pdf.page_count, self
         )
         self._ocr_progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self._ocr_progress_dialog.setStyleSheet("")  # Reset style for readability
+        self._ocr_progress_dialog.setStyleSheet("")
         self._ocr_progress_dialog.show()
 
         pdf_hash = self._pdf.file_hash()
@@ -436,7 +432,6 @@ class MainWindow(QMainWindow):
         self._ocr_all_worker.finished.connect(self._on_ocr_all_finished)
         self._ocr_all_worker.error.connect(self._on_ocr_all_error)
 
-        # Auto-cleanup
         self._ocr_all_worker.finished.connect(self._ocr_all_thread.quit)
         self._ocr_all_worker.finished.connect(self._ocr_all_worker.deleteLater)
         self._ocr_all_thread.finished.connect(self._ocr_all_thread.deleteLater)
@@ -444,17 +439,14 @@ class MainWindow(QMainWindow):
         self._ocr_all_thread.start()
 
     def _on_ocr_all_page_finished(self, page_num: int) -> None:
-        """Update progress dialog value when a page is done."""
         if self._ocr_progress_dialog:
             self._ocr_progress_dialog.setValue(page_num)
 
     def _on_ocr_all_progress_text(self, text: str) -> None:
-        """Update progress dialog label text."""
         if self._ocr_progress_dialog:
             self._ocr_progress_dialog.setLabelText(text)
 
     def _on_ocr_all_finished(self) -> None:
-        """Called when the worker loop completes or is cancelled."""
         if self._ocr_progress_dialog and not self._ocr_progress_dialog.wasCanceled():
             self._status.showMessage("OCR for all pages complete.")
             self._load_ocr_for_current_page()
